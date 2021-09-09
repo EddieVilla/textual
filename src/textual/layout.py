@@ -50,24 +50,31 @@ class ReflowResult(NamedTuple):
     resized: set[Widget]
 
 
+@rich.repr.auto
 class LayoutUpdate:
-    def __init__(self, lines: Lines, x: int, y: int) -> None:
+    def __init__(self, lines: Lines, region: Region) -> None:
         self.lines = lines
-        self.x = x
-        self.y = y
+        self.region = region
 
     def __rich_console__(
         self, console: Console, options: ConsoleOptions
     ) -> RenderResult:
         yield Control.home().segment
-        x = self.x
+        x = self.region.x
         new_line = Segment.line()
         move_to = Control.move_to
-        for last, (y, line) in loop_last(enumerate(self.lines, self.y)):
+        for last, (y, line) in loop_last(enumerate(self.lines, self.region.y)):
             yield move_to(x, y).segment
             yield from line
             if not last:
                 yield new_line
+
+    def __rich_repr__(self) -> rich.repr.Result:
+        x, y, width, height = self.region
+        yield "x", x
+        yield "y", y
+        yield "width", width
+        yield "height", height
 
 
 class Layout(ABC):
@@ -95,9 +102,6 @@ class Layout(ABC):
 
     def reset(self) -> None:
         self._cuts = None
-        # if self._require_update:
-        #     self.regions.clear()
-        #     self._layout_map = None
 
     def reflow(
         self, console: Console, width: int, height: int, scroll: Offset
@@ -176,6 +180,7 @@ class Layout(ABC):
                 yield widget, region.intersection(clip), region
 
     def get_offset(self, widget: Widget) -> Offset:
+        """Get the offset of a widget."""
         try:
             return self.map[widget].region.origin
         except KeyError:
@@ -265,7 +270,7 @@ class Layout(ABC):
 
             lines = widget._get_lines()
 
-            if clip in region:
+            if region in clip:
                 yield region, clip, lines
             elif clip.overlaps(region):
                 new_region = region.intersection(clip)
@@ -307,7 +312,7 @@ class Layout(ABC):
         height = self.height
         screen = Region(0, 0, width, height)
 
-        crop_region = crop or Region(0, 0, self.width, self.height)
+        crop_region = crop.intersection(screen) if crop else screen
 
         _Segment = Segment
         divide = _Segment.divide
@@ -326,23 +331,15 @@ class Layout(ABC):
         # Go through all the renders in reverse order and fill buckets with no render
         renders = list(self._get_renders(console))
 
-        clip_y, clip_y2 = crop_region.y_extents
         for region, clip, lines in chain(
             renders, [(screen, screen, background_render)]
         ):
-            # clip = clip.intersection(crop_region)
             render_region = region.intersection(clip)
-            for y, line in enumerate(lines, render_region.y):
-                if clip_y > y > clip_y2:
-                    continue
-                # first_cut = clamp(render_region.x, clip_x, clip_x2)
-                # last_cut = clamp(render_region.x + render_region.width, clip_x, clip_x2)
-                first_cut = render_region.x
-                last_cut = render_region.x_max
-                final_cuts = [cut for cut in cuts[y] if (last_cut >= cut >= first_cut)]
-                # final_cuts = cuts[y]
+            for y, line in zip(render_region.y_range, lines):
 
-                # log(final_cuts, render_region.x_extents)
+                first_cut, last_cut = render_region.x_extents
+                final_cuts = [cut for cut in cuts[y] if (last_cut >= cut >= first_cut)]
+
                 if len(final_cuts) == 2:
                     cut_segments = [line]
                 else:
@@ -388,6 +385,7 @@ class Layout(ABC):
 
         update_region = region.intersection(clip)
         update_lines = self.render(console, crop=update_region).lines
-        update = LayoutUpdate(update_lines, update_region.x, update_region.y)
+        update = LayoutUpdate(update_lines, update_region)
+        log(update)
 
         return update

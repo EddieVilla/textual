@@ -9,9 +9,9 @@ from rich.style import Style
 
 from . import events
 from . import log
+from . import messages
 from .layout import Layout, NoWidget
 from .geometry import Size, Offset, Region
-from .messages import UpdateMessage, LayoutMessage
 from .reactive import Reactive, watch
 
 from .widget import Widget, Widget
@@ -29,7 +29,6 @@ class View(Widget):
     def __init__(self, layout: Layout = None, name: str | None = None) -> None:
         self.layout: Layout = layout or self.layout_factory()
         self.mouse_over: Widget | None = None
-        self.focused: Widget | None = None
         self.widgets: set[Widget] = set()
         self.named_widgets: dict[str, Widget] = {}
         self._mouse_style: Style = Style()
@@ -87,25 +86,21 @@ class View(Widget):
     def get_offset(self, widget: Widget) -> Offset:
         return self.layout.get_offset(widget)
 
-    def check_layout(self) -> bool:
-        return super().check_layout() or self.layout.check_update()
+    async def handle_update(self, message: messages.Update) -> None:
+        if self.is_root_view:
+            message.stop()
+            widget = message.widget
+            assert isinstance(widget, Widget)
 
-    async def message_update(self, message: UpdateMessage) -> None:
-        message.stop()
-        widget = message.widget
-        assert isinstance(widget, Widget)
+            display_update = self.layout.update_widget(self.console, widget)
+            if display_update is not None:
+                self.app.display(display_update)
 
-        if message.layout:
-            await self.root_view.refresh_layout()
-            self.log("LAYOUT")
-            # await self.app.refresh()
-        display_update = self.root_view.layout.update_widget(self.console, widget)
-        if display_update is not None:
-            self.app.display(display_update)
-
-    async def message_layout(self, message: LayoutMessage) -> None:
-        await self.root_view.refresh_layout()
-        self.app.refresh()
+    async def handle_layout(self, message: messages.Layout) -> None:
+        if self.is_root_view:
+            message.stop()
+            await self.refresh_layout()
+            self.app.refresh()
 
     async def mount(self, *anon_widgets: Widget, **widgets: Widget) -> None:
 
@@ -209,7 +204,7 @@ class View(Widget):
             )
 
     async def forward_event(self, event: events.Event) -> None:
-
+        event.set_forwarded()
         if isinstance(event, (events.Enter, events.Leave)):
             await self.post_message(event)
 
@@ -237,14 +232,14 @@ class View(Widget):
                 widget, _region = self.get_widget_at(event.x, event.y)
             except NoWidget:
                 return
-            scroll_widget = widget or self.focused
+            scroll_widget = widget
             if scroll_widget is not None:
                 await scroll_widget.forward_event(event)
         else:
-            if self.focused is not None:
-                await self.focused.forward_event(event)
+            self.log("view.forwarded", event)
+            await self.post_message(event)
 
     async def action_toggle(self, name: str) -> None:
         widget = self.named_widgets[name]
         widget.visible = not widget.visible
-        await self.post_message(LayoutMessage(self))
+        await self.post_message(messages.Layout(self))

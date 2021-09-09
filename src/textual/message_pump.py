@@ -3,19 +3,15 @@ from __future__ import annotations
 import asyncio
 from asyncio import CancelledError
 from asyncio import Queue, QueueEmpty, Task
-import inspect
 from typing import TYPE_CHECKING, Awaitable, Iterable, Callable
 from weakref import WeakSet
-
-from rich.traceback import Traceback
 
 from . import events
 from . import log
 from ._timer import Timer, TimerCallback
+from ._callback import invoke
 from ._context import active_app
 from .message import Message
-from .reactive import Reactive
-
 
 if TYPE_CHECKING:
     from .app import App
@@ -125,9 +121,9 @@ class MessagePump:
     def set_timer(
         self,
         delay: float,
+        callback: TimerCallback = None,
         *,
         name: str | None = None,
-        callback: TimerCallback = None,
     ) -> Timer:
         timer = Timer(self, delay, self, name=name, callback=callback, repeat=0)
         timer_task = asyncio.get_event_loop().create_task(timer.run())
@@ -137,9 +133,9 @@ class MessagePump:
     def set_interval(
         self,
         interval: float,
+        callback: TimerCallback = None,
         *,
         name: str | None = None,
-        callback: TimerCallback = None,
         repeat: int = 0,
     ):
         timer = Timer(
@@ -175,7 +171,7 @@ class MessagePump:
         except CancelledError:
             pass
         finally:
-            self._runnning = False
+            self._running = False
 
     async def _process_messages(self) -> None:
         """Process messages until the queue is closed."""
@@ -196,6 +192,7 @@ class MessagePump:
                 pending = self.peek_message()
                 if pending is None or not message.can_replace(pending):
                     break
+                # self.log(message, "replaced with", pending)
                 try:
                     message = await self.get_message()
                 except MessagePumpClosed:
@@ -219,11 +216,14 @@ class MessagePump:
 
     async def dispatch_message(self, message: Message) -> bool | None:
         _rich_traceback_guard = True
-        if isinstance(message, events.Event):
-            if not isinstance(message, events.Null):
-                await self.on_event(message)
-        else:
-            return await self.on_message(message)
+        try:
+            if isinstance(message, events.Event):
+                if not isinstance(message, events.Null):
+                    await self.on_event(message)
+            else:
+                return await self.on_message(message)
+        finally:
+            message._done_event.set()
         return False
 
     def _get_dispatch_methods(
@@ -241,25 +241,29 @@ class MessagePump:
 
         for method in self._get_dispatch_methods(f"on_{event.name}", event):
             log(event, ">>>", self, verbosity=event.verbosity)
-            await method(event)
+            await invoke(method, event)
 
         if event.bubble and self._parent and not event._stop_propagation:
-            if event.sender != self._parent and self.is_parent_active:
+            if event.sender == self._parent:
+                # parent is sender, so we stop propagation after parent
+                event.stop()
+            if self.is_parent_active:
                 await self._parent.post_message(event)
 
     async def on_message(self, message: Message) -> None:
         _rich_traceback_guard = True
-        method_name = f"message_{message.name}"
+        method_name = f"handle_{message.name}"
 
         method = getattr(self, method_name, None)
         if method is not None:
             log(message, ">>>", self, verbosity=message.verbosity)
-            await method(message)
+            await invoke(method, message)
 
         if message.bubble and self._parent and not message._stop_propagation:
             if message.sender == self._parent:
-                pass
-            elif not self._parent._closed and not self._parent._closing:
+                # parent is sender, so we stop propagation after parent
+                message.stop()
+            if not self._parent._closed and not self._parent._closing:
                 await self._parent.post_message(message)
 
     def post_message_no_wait(self, message: Message) -> bool:
@@ -308,9 +312,7 @@ class MessagePump:
         event.stop()
         if event.callback is not None:
             try:
-                callback_result = event.callback()
-                if inspect.isawaitable(callback_result):
-                    await callback_result
+                await invoke(event.callback)
             except Exception as error:
                 raise CallbackError(
                     f"unable to run callback {event.callback!r}; {error}"

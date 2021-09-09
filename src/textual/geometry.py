@@ -74,6 +74,7 @@ class Size(NamedTuple):
     height: int
 
     def __bool__(self) -> bool:
+        """A Size is Falsey if it has area 0."""
         return self.width * self.height != 0
 
     @property
@@ -90,6 +91,16 @@ class Size(NamedTuple):
         """Get a region of the same size."""
         width, height = self
         return Region(0, 0, width, height)
+
+    def __add__(self, other: tuple[int, int]) -> Size:
+        width, height = self
+        width2, height2 = other
+        return Size(width + width2, height + height2)
+
+    def __sub__(self, other: tuple[int, int]) -> Size:
+        width, height = self
+        width2, height2 = other
+        return Size(width - width2, height - height2)
 
     def contains(self, x: int, y: int) -> bool:
         """Check if a point is in the size.
@@ -125,16 +136,16 @@ class Size(NamedTuple):
                 "Dimensions.__contains__ requires an iterable of two integers"
             )
         width, height = self
-        return bool(width > x >= 0 and height > y >= 0)
+        return width > x >= 0 and height > y >= 0
 
 
 class Region(NamedTuple):
     """Defines a rectangular region."""
 
-    x: int
-    y: int
-    width: int
-    height: int
+    x: int = 0
+    y: int = 0
+    width: int = 0
+    height: int = 0
 
     @classmethod
     def from_corners(cls, x1: int, y1: int, x2: int, y2: int) -> Region:
@@ -156,33 +167,49 @@ class Region(NamedTuple):
         """Create a region from origin and size.
 
         Args:
-            origin (Point): [description]
-            size (tuple[int, int]): [description]
+            origin (Point): Origin (top left point)
+            size (tuple[int, int]): Dimensions of region.
 
         Returns:
-            Region: [description]
+            Region: A region instance.
         """
         x, y = origin
         width, height = size
-        return Region(x, y, width, height)
+        return cls(x, y, width, height)
 
     def __bool__(self) -> bool:
         return bool(self.width and self.height)
 
     @property
     def x_extents(self) -> tuple[int, int]:
+        """Get the starting and ending x coord.
+
+        The end value is non inclusive.
+
+        Returns:
+            tuple[int, int]: [description]
+        """
         return (self.x, self.x + self.width)
 
     @property
     def y_extents(self) -> tuple[int, int]:
+        """Get the starting and ending x coord.
+
+        The end value is non inclusive.
+
+        Returns:
+            tuple[int, int]: [description]
+        """
         return (self.y, self.y + self.height)
 
     @property
     def x_max(self) -> int:
+        """Maximum X value (non inclusive)"""
         return self.x + self.width
 
     @property
-    def y_end(self) -> int:
+    def y_max(self) -> int:
+        """Maximum Y value (non inclusive)"""
         return self.y + self.height
 
     @property
@@ -212,11 +239,13 @@ class Region(NamedTuple):
 
     @property
     def x_range(self) -> range:
-        return range(self.x, self.x_max)
+        """A range object for X coordinates"""
+        return range(self.x, self.x + self.width)
 
     @property
     def y_range(self) -> range:
-        return range(self.y, self.y_end)
+        """A range object for Y coordinates"""
+        return range(self.y, self.y + self.height)
 
     def __add__(self, other: Any) -> Region:
         if isinstance(other, tuple):

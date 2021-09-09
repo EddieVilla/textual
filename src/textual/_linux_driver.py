@@ -35,10 +35,10 @@ class LinuxDriver(Driver):
         width: int | None = 80
         height: int | None = 25
         try:
-            width, height = os.get_terminal_size(sys.stdin.fileno())
+            width, height = os.get_terminal_size(sys.__stdin__.fileno())
         except (AttributeError, ValueError, OSError):
             try:
-                width, height = os.get_terminal_size(sys.stdout.fileno())
+                width, height = os.get_terminal_size(sys.__stdout__.fileno())
             except (AttributeError, ValueError, OSError):
                 pass
         width = width or 80
@@ -172,11 +172,6 @@ class LinuxDriver(Driver):
             pass  # TODO: log
 
     def _run_input_thread(self, loop) -> None:
-        def send_event(event: events.Event) -> None:
-            asyncio.run_coroutine_threadsafe(
-                self._target.post_message(event),
-                loop=loop,
-            )
 
         selector = selectors.DefaultSelector()
         selector.register(self.fileno, selectors.EVENT_READ)
