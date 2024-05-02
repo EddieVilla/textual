@@ -1,17 +1,8 @@
 from __future__ import annotations
 
-from collections import deque
 import io
-from typing import (
-    Callable,
-    Deque,
-    Generator,
-    TypeVar,
-    Generic,
-    Union,
-    Iterator,
-    Iterable,
-)
+from collections import deque
+from typing import Callable, Deque, Generator, Generic, Iterable, TypeVar, Union
 
 
 class ParseError(Exception):
@@ -48,7 +39,7 @@ class _ReadUntil(Awaitable):
         self.max_bytes = max_bytes
 
 
-class PeekBuffer(Awaitable):
+class _PeekBuffer(Awaitable):
     __slots__: list[str] = []
 
 
@@ -62,7 +53,7 @@ class Parser(Generic[T]):
     read = _Read
     read1 = _Read1
     read_until = _ReadUntil
-    peek_buffer = PeekBuffer
+    peek_buffer = _PeekBuffer
 
     def __init__(self) -> None:
         self._buffer = io.StringIO()
@@ -80,7 +71,6 @@ class Parser(Generic[T]):
         self._awaiting = next(self._gen)
 
     def feed(self, data: str) -> Iterable[T]:
-
         if self._eof:
             raise ParseError("end of file reached") from None
         if not data:
@@ -104,14 +94,13 @@ class Parser(Generic[T]):
         while tokens:
             yield popleft()
 
-        while pos < data_size or isinstance(self._awaiting, PeekBuffer):
-
+        while pos < data_size or isinstance(self._awaiting, _PeekBuffer):
             _awaiting = self._awaiting
             if isinstance(_awaiting, _Read1):
                 self._awaiting = self._gen.send(data[pos : pos + 1])
                 pos += 1
 
-            elif isinstance(_awaiting, PeekBuffer):
+            elif isinstance(_awaiting, _PeekBuffer):
                 self._awaiting = self._gen.send(data[pos:])
 
             elif isinstance(_awaiting, _Read):
@@ -125,7 +114,8 @@ class Parser(Generic[T]):
                     _awaiting.remaining = remaining
                 else:
                     _awaiting = self._gen.send(_buffer.getvalue())
-                    _buffer.truncate(0)
+                    _buffer.seek(0)
+                    _buffer.truncate()
 
             elif isinstance(_awaiting, _ReadUntil):
                 chunk = data[pos:]
@@ -150,14 +140,14 @@ class Parser(Generic[T]):
                     data = _buffer.getvalue()[sep_index:]
                     pos = 0
                     self._awaiting = self._gen.send(_buffer.getvalue()[:sep_index])
-                    _buffer.truncate(0)
+                    _buffer.seek(0)
+                    _buffer.truncate()
 
             while tokens:
                 yield popleft()
 
     def parse(self, on_token: Callable[[T], None]) -> Generator[Awaitable, str, None]:
-        return
-        yield
+        yield from ()
 
 
 if __name__ == "__main__":
@@ -167,7 +157,6 @@ if __name__ == "__main__":
         def parse(
             self, on_token: Callable[[str], None]
         ) -> Generator[Awaitable, str, None]:
-            data = yield self.read1()
             while True:
                 data = yield self.read1()
                 if not data:
@@ -175,8 +164,6 @@ if __name__ == "__main__":
                 on_token(data)
 
     test_parser = TestParser()
-
-    import time
 
     for n in range(0, len(data), 5):
         for token in test_parser.feed(data[n : n + 5]):

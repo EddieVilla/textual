@@ -1,76 +1,99 @@
 from __future__ import annotations
 
-from typing import Iterable
+from fractions import Fraction
+from typing import TYPE_CHECKING
 
-from rich.console import Console
-from rich.measure import Measurement
+from .._layout import ArrangeResult, Layout, WidgetPlacement
+from .._resolve import resolve_box_models
+from ..geometry import Region, Size
 
-from .. import log
-from ..geometry import Offset, Region, Size
-from ..layout import Layout
-from ..layout_map import LayoutMap
-from ..widget import Widget
+if TYPE_CHECKING:
+    from ..geometry import Spacing
+    from ..widget import Widget
 
 
 class VerticalLayout(Layout):
-    def __init__(
-        self,
-        *,
-        auto_width: bool = False,
-        z: int = 0,
-        gutter: tuple[int, int] | None = None
-    ):
-        self.auto_width = auto_width
-        self.z = z
-        self.gutter = gutter or (0, 0)
-        self._widgets: list[Widget] = []
-        self._max_widget_width = 0
-        super().__init__()
+    """Used to layout Widgets vertically on screen, from top to bottom."""
 
-    def add(self, widget: Widget) -> None:
-        self._widgets.append(widget)
-        self._max_widget_width = max(widget.app.measure(widget), self._max_widget_width)
+    name = "vertical"
 
-    def clear(self) -> None:
-        del self._widgets[:]
-        self._max_widget_width = 0
+    def arrange(
+        self, parent: Widget, children: list[Widget], size: Size
+    ) -> ArrangeResult:
+        placements: list[WidgetPlacement] = []
+        add_placement = placements.append
 
-    def get_widgets(self) -> Iterable[Widget]:
-        return self._widgets
+        child_styles = [child.styles for child in children]
+        box_margins: list[Spacing] = [
+            styles.margin for styles in child_styles if styles.overlay != "screen"
+        ]
+        if box_margins:
+            resolve_margin = Size(
+                max(
+                    [
+                        margin_right + margin_left
+                        for _, margin_right, _, margin_left in box_margins
+                    ]
+                ),
+                sum(
+                    [
+                        max(margin1[2], margin2[0])
+                        for margin1, margin2 in zip(box_margins, box_margins[1:])
+                    ]
+                )
+                + (box_margins[0].top + box_margins[-1].bottom),
+            )
+        else:
+            resolve_margin = Size(0, 0)
 
-    def generate_map(
-        self, console: Console, size: Size, viewport: Region, scroll: Offset
-    ) -> LayoutMap:
-        index = 0
-        width, height = size
-        gutter_height, gutter_width = self.gutter
-        render_width = (
-            max(width, self._max_widget_width) + gutter_width * 2
-            if self.auto_width
-            else width - gutter_width * 2
+        box_models = resolve_box_models(
+            [styles.height for styles in child_styles],
+            children,
+            size,
+            parent.app.size,
+            resolve_margin,
+            resolve_dimension="height",
         )
 
-        x = gutter_width
-        y = gutter_height
-        map: LayoutMap = LayoutMap(size)
+        margins = [
+            max((box1.margin.bottom, box2.margin.top))
+            for box1, box2 in zip(box_models, box_models[1:])
+        ]
+        if box_models:
+            margins.append(box_models[-1].margin.bottom)
 
-        def add_widget(widget: Widget, region: Region, clip: Region) -> None:
-            map.add_widget(console, widget, region, (self.z, index), clip)
-
-        for widget in self._widgets:
-            if (
-                not widget.render_cache
-                or widget.render_cache.size.width != render_width
-            ):
-                widget.render_lines_free(render_width)
-            assert widget.render_cache is not None
-            render_height = widget.render_cache.size.height
-            region = Region(x, y, render_width, render_height)
-            add_widget(widget, region - scroll, viewport)
-
-        x, y, width, height = map.contents_region
-        map.contents_region = Region(
-            x, y, width + self.gutter[0], height + self.gutter[1]
+        y = next(
+            (
+                Fraction(box_model.margin.top)
+                for box_model, child in zip(box_models, children)
+                if child.styles.overlay != "screen"
+            ),
+            Fraction(0),
         )
 
-        return map
+        _Region = Region
+        _WidgetPlacement = WidgetPlacement
+        for widget, (content_width, content_height, box_margin), margin in zip(
+            children, box_models, margins
+        ):
+            overlay = widget.styles.overlay == "screen"
+            next_y = y + content_height
+            add_placement(
+                _WidgetPlacement(
+                    _Region(
+                        box_margin.left,
+                        int(y),
+                        int(content_width),
+                        int(next_y) - int(y),
+                    ),
+                    box_margin,
+                    widget,
+                    0,
+                    False,
+                    overlay,
+                )
+            )
+            if not overlay:
+                y = next_y + margin
+
+        return placements
